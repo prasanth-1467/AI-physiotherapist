@@ -1,10 +1,10 @@
 """Tracker Week Agent - Module 3
-Receives weekly summary from Module 2, generates structured weekly progress report.
+Core: Loads 7 days → LLM generates report → formats → saves → sends to feedback_agent
 """
 import json
 from datetime import datetime
 from utils.logger import get_logger
-from utils.helpers import ensure_directory, safe_write_json, timestamp
+from utils.helpers import ensure_directory, safe_write_json
 from config import config
 
 logger = get_logger(__name__)
@@ -16,63 +16,57 @@ class TrackerWeekAgent:
         self.reports_path = config.OUTPUT_PATH / "reports" / "weekly_reports"
         ensure_directory(self.reports_path)
 
-    def _load_week_sessions(self, user_id, week):
-        path = self.weekly_path / f"{user_id}_week{week}.json"
+    def generate_weekly_report(self, user_id, week, analysis):
+        """Core: Load 7 days → LLM report → format → save"""
+        # Load all 7 days
         try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logger.warning(f"No session data for {user_id} week {week}")
-            return {"days": []}
+            with open(self.weekly_path / f"{user_id}_week{week}.json") as f:
+                sessions = json.load(f)
+        except:
+            sessions = {"days": []}
+        
+        # LLM prompt
+        prompt = f"""Sessions: {json.dumps(sessions['days'])}
+Analysis: {json.dumps(analysis)}
 
-    def _build_prompt(self, sessions, analysis):
-        return (
-            f"Weekly session data:\n{json.dumps(sessions['days'])}\n"
-            f"Weekly analysis:\n{json.dumps(analysis)}\n"
-            "Generate a structured weekly progress report as JSON with keys: "
-            "summary, exercise_breakdown (list), improvement_percentage, "
-            "consistency (days_attended out of 7), problem_areas (list), "
-            "strengths (list), recommendations (list). Return JSON only."
-        )
+Generate structured weekly progress report covering:
+- exercises completed
+- average performance score
+- improvement percentage
+- consistency (days attended)
+- key problem areas
 
-    def _generate_report_fallback(self, sessions, analysis):
-        days = sessions.get("days", [])
-        scores = [d.get("average_score", 0) for d in days]
-        exercises = {}
-        for d in days:
-            for r in d.get("results", []):
-                name = r.get("exercise_name", r.get("target_joint", "unknown"))
-                exercises.setdefault(name, []).append(r.get("performance_score", 0))
-        breakdown = [{"exercise": k, "avg_score": round(sum(v)/len(v), 1), "sessions": len(v)}
-                     for k, v in exercises.items()]
-        avg = round(sum(scores)/len(scores), 1) if scores else 0
-        delta = round(scores[-1] - scores[0], 1) if len(scores) > 1 else 0
-        weak = analysis.get("weak_joints", [])
-        strong = analysis.get("strong_joints", [])
-        return {
-            "summary": f"Week completed with {len(days)}/7 days. Avg score: {avg}. Trend: {analysis.get('trend', 'stable')}.",
-            "exercise_breakdown": breakdown,
-            "improvement_percentage": delta,
-            "consistency": {"days_attended": len(days), "total_days": 7},
-            "problem_areas": weak or ["None identified"],
-            "strengths": strong or ["Consistent attendance"],
-            "recommendations": analysis.get("recommendations", ["Continue current routine"])
-        }
-
-    def generate_weekly_report(self, user_id, week_number, analysis):
-        sessions = self._load_week_sessions(user_id, week_number)
-        prompt = self._build_prompt(sessions, analysis)
+Return JSON: {{"summary": "", "exercise_breakdown": [], "improvement_percentage": 0, 
+"consistency": {{"days_attended": 0}}, "problem_areas": [], "areas_to_work_on": []}}"""
+        
+        # Get LLM response
         try:
-            raw = self.llm_client.generate(prompt) if self.llm_client else None
-            report = json.loads(raw) if raw else self._generate_report_fallback(sessions, analysis)
-        except Exception as e:
-            logger.error(f"LLM report error: {e}")
-            report = self._generate_report_fallback(sessions, analysis)
-        result = {
-            "user_id": user_id, "week_number": week_number,
-            "report_date": datetime.now().strftime("%Y-%m-%d"),
-            "report": report, "status": "success"
+            report = json.loads(self.llm_client.generate(prompt)) if self.llm_client else {}
+        except:
+            days = sessions.get("days", [])
+            scores = [d.get("average_score", 0) for d in days]
+            avg = round(sum(scores)/len(scores), 1) if scores else 0
+            report = {
+                "summary": f"Week {week}: {len(days)}/7 days, avg {avg}%",
+                "exercise_breakdown": [],
+                "improvement_percentage": round(scores[-1]-scores[0], 1) if len(scores)>1 else 0,
+                "consistency": {"days_attended": len(days)},
+                "problem_areas": analysis.get("weak_joints", []),
+                "areas_to_work_on": analysis.get("weak_joints", [])
+            }
+        
+        # Format with sections
+        formatted = {
+            "Summary": report.get("summary", ""),
+            "Exercise Breakdown": report.get("exercise_breakdown", []),
+            "Improvement": f"{report.get('improvement_percentage', 0)}%",
+            "Areas to Work On": report.get("areas_to_work_on", [])
         }
-        safe_write_json(self.reports_path / f"{user_id}_week{week_number}_report_{timestamp()}.json", result)
-        logger.info(f"Weekly report generated for {user_id} week {week_number}")
+        
+        # Save to output/reports/weekly_reports
+        result = {"user_id": user_id, "week": week, "report": formatted}
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_write_json(self.reports_path / f"week{week}_report_{ts}.json", result)
+        logger.info(f"Weekly report saved: week{week}")
+        
         return result

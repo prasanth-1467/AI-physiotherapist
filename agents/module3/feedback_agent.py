@@ -1,10 +1,10 @@
 """Feedback Agent - Module 3
-Predicts recovery timeline and generates motivational/corrective feedback.
+Core: Load reports → calc recovery rate → LLM predicts date + feedback → save → send to user
 """
 import json
 from datetime import datetime, timedelta
 from utils.logger import get_logger
-from utils.helpers import ensure_directory, safe_write_json, timestamp
+from utils.helpers import ensure_directory, safe_write_json
 from config import config
 
 logger = get_logger(__name__)
@@ -17,54 +17,67 @@ class FeedbackAgent:
         ensure_directory(self.predictions_path)
         ensure_directory(self.feedback_path)
 
-    def _calc_recovery_estimate(self, weekly_report, monthly_report=None):
-        report = weekly_report.get("report", {})
-        imp = report.get("improvement_percentage", 0)
-        avg = float(report.get("consistency", {}).get("days_attended", 7)) / 7
-        weekly_rate = imp * avg if imp > 0 else 1.0
-        current_score = 0
-        for ex in report.get("exercise_breakdown", []):
-            current_score = max(current_score, ex.get("avg_score", 0))
-        if monthly_report:
-            mr = monthly_report.get("report", {})
-            current_score = max(current_score, mr.get("current_avg", current_score))
-        gap = 100 - current_score
-        weeks_left = max(1, round(gap / weekly_rate)) if weekly_rate > 0 else 12
-        est_date = datetime.now() + timedelta(weeks=weeks_left)
-        tone = "positive" if imp >= 5 else "corrective"
-        return {"current_score": current_score, "weekly_rate": round(weekly_rate, 1),
-                "gap_to_full": round(gap, 1), "weeks_remaining": weeks_left,
-                "predicted_recovery_date": est_date.strftime("%Y-%m-%d"), "tone": tone}
-
     def generate_feedback(self, user_id, weekly_report, monthly_report=None):
-        estimate = self._calc_recovery_estimate(weekly_report, monthly_report)
-        prompt = (
-            f"Recovery estimate: {json.dumps(estimate)}\n"
-            f"Weekly report: {json.dumps(weekly_report.get('report', {}))}\n"
-            f"Tone: {estimate['tone']}\n"
-            "Return JSON: predicted_recovery_date, feedback_message, feedback_tone, "
-            "milestones (list), tips (list). If positive: appreciation + milestone highlights. "
-            "If corrective: improvement tips + encouragement. JSON only."
-        )
-        try:
-            raw = self.llm_client.generate(prompt) if self.llm_client else None
-            feedback = json.loads(raw) if raw else self._fallback(estimate)
-        except Exception as e:
-            logger.error(f"LLM feedback error: {e}")
-            feedback = self._fallback(estimate)
-        safe_write_json(self.predictions_path / f"{user_id}_prediction_{timestamp()}.json",
-                        {"user_id": user_id, **estimate})
-        result = {"user_id": user_id, "feedback": feedback, "estimate": estimate, "status": "success"}
-        safe_write_json(self.feedback_path / f"{user_id}_feedback_{timestamp()}.json", result)
-        logger.info(f"Feedback for {user_id}: {feedback.get('feedback_tone')} - ETA {estimate['predicted_recovery_date']}")
-        return result
-
-    def _fallback(self, est):
-        if est["tone"] == "positive":
-            msg = f"Great progress! You're improving {est['weekly_rate']}% per week. Estimated full recovery by {est['predicted_recovery_date']}."
+        """Core: Load reports → calc progress rate → LLM predict + feedback → save"""
+        # Calculate recovery progress rate
+        report = weekly_report.get("report", {})
+        imp_pct = 0
+        if isinstance(report.get("Improvement"), str):
+            imp_pct = float(report["Improvement"].replace("%", ""))
         else:
-            msg = f"Keep going! You have {est['gap_to_full']}% to go. Try to attend all 7 days next week for faster results."
-        return {"predicted_recovery_date": est["predicted_recovery_date"], "feedback_message": msg,
-                "feedback_tone": est["tone"],
-                "milestones": [f"Current score: {est['current_score']}%"] if est["tone"] == "positive" else [],
-                "tips": ["Increase session consistency", "Focus on weak joints"] if est["tone"] == "corrective" else []}
+            imp_pct = report.get("improvement_percentage", 0)
+        
+        current_score = 70.0  # default estimate
+        if monthly_report:
+            current_score = monthly_report.get("report", {}).get("overall_improvement_pct", 70.0)
+        
+        gap = 100 - current_score
+        weeks_left = max(1, round(gap / imp_pct)) if imp_pct > 0 else 12
+        recovery_date = (datetime.now() + timedelta(weeks=weeks_left)).strftime("%Y-%m-%d")
+        
+        # LLM prompt
+        prompt = f"""Weekly: {json.dumps(weekly_report)}
+Monthly: {json.dumps(monthly_report if monthly_report else {{}})}
+Progress: {imp_pct}% per week, {gap}% remaining, ETA {weeks_left} weeks
+
+Based on this progress data, predict when user will fully recover.
+Generate feedback:
+- If progress good (>5%/week): motivating with appreciation + milestone highlights
+- If progress slow (<5%/week): encouraging with tips
+
+Return JSON: {{"predicted_recovery_date": "{recovery_date}", "feedback_message": "", 
+"feedback_tone": "positive|corrective", "milestones": [], "tips": []}}"""
+        
+        try:
+            feedback = json.loads(self.llm_client.generate(prompt)) if self.llm_client else {}
+        except:
+            tone = "positive" if imp_pct >= 5 else "corrective"
+            if tone == "positive":
+                msg = f"Great! {imp_pct}% improvement/week. Full recovery by {recovery_date}"
+                miles = [f"Current: {current_score}%", "Strong consistency"]
+                tips = []
+            else:
+                msg = f"Keep going! {gap}% to go. Attend all 7 days for faster results"
+                miles = []
+                tips = ["Increase consistency", "Focus on weak areas"]
+            
+            feedback = {
+                "predicted_recovery_date": recovery_date,
+                "feedback_message": msg,
+                "feedback_tone": tone,
+                "milestones": miles,
+                "tips": tips
+            }
+        
+        # Save prediction
+        pred = {"user_id": user_id, "predicted_date": feedback.get("predicted_recovery_date"), 
+                "weeks_remaining": weeks_left, "progress_rate": imp_pct}
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_write_json(self.predictions_path / f"{user_id}_pred_{ts}.json", pred)
+        
+        # Save feedback
+        result = {"user_id": user_id, "feedback": feedback}
+        safe_write_json(self.feedback_path / f"{user_id}_feedback_{ts}.json", result)
+        
+        logger.info(f"Feedback: {feedback['feedback_tone']} - ETA {feedback['predicted_recovery_date']}")
+        return result
