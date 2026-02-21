@@ -1,0 +1,23 @@
+# Google GenAI for LLM interactions
+google-genai==1.64.0
+
+# Mediapipe for pose estimation
+mediapipe==0.10.32
+
+# OpenCV for image and video processing
+opencv-python==4.13.0.92
+
+# Pydantic for structured schema validation
+pydantic==2.12.5
+
+# PyPDF2 for reading PDF documents
+PyPDF2==3.0.1
+
+# PyTesseract for OCR
+pytesseract==0.3.13
+
+# Pillow for image handling
+pillow==12.1.1
+
+# NumPy for matrix calculations
+numpy==2.4.2
