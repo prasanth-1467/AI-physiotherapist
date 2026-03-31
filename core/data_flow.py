@@ -20,7 +20,7 @@ class Module2Flow:
         self.stream = live_stream_service
         logger.info("Module2Flow initialized")
 
-    def run(self, summary, user_id, week_number=1):
+    def run(self, summary, user_id, week_number=1, fps=None, duration=None):
         # 1. Generate exercise suggestions from confirmed summary
         suggestions = self.suggestion.process_summary(summary, user_id)
         logger.info(f"Suggestions ready: {suggestions['total_suggestions']} exercises")
@@ -30,7 +30,7 @@ class Module2Flow:
         for ex in suggestions["suggestions"]:
             with VoiceFeedbackContext(self.voice, ex, frame_getter):
                 pass  # ResultsAgent handles frames internally
-        daily_result = self.results.process_suggestions(suggestions)
+        daily_result = self.results.process_suggestions(suggestions, fps=fps, duration=duration)
         logger.info(f"Session done, avg score: {daily_result['average_score']}")
 
         # 3. Feed daily result into weekly tracker

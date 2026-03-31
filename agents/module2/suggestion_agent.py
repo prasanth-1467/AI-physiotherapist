@@ -14,6 +14,7 @@ class SuggestionAgent:
         self.llm_client = llm_client
         self.history_path = config.DATA_PATH / "user_profiles" / "rehab_history"
         self.output_path = config.OUTPUT_PATH / "suggestions" / "exercise_suggestions"
+        ensure_directory(self.history_path)
         ensure_directory(self.output_path)
         logger.info("SuggestionAgent initialized")
 

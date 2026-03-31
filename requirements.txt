@@ -4,3 +4,7 @@ numpy
 python-dotenv
 pydantic
 tqdm
+fastapi
+uvicorn
+pypdf
+python-multipart
