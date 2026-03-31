@@ -11,10 +11,12 @@ logger = get_logger(__name__)
 RATINGS = [(90, "Excellent"), (75, "Good"), (60, "Fair"), (40, "Needs Improvement"), (0, "Poor")]
 
 class ResultsAgent:
-    def __init__(self, live_stream_service=None, pose_estimation_service=None, angle_calculator_service=None):
+    def __init__(self, live_stream_service=None, pose_estimation_service=None, angle_calculator_service=None, fps=30, duration=10):
         self.stream = live_stream_service
         self.pose = pose_estimation_service
         self.angle = angle_calculator_service
+        self.fps = fps
+        self.duration = duration
         self.angle_path = config.DATA_PATH / "processed" / "angle_data"
         self.results_path = config.OUTPUT_PATH / "results"
         ensure_directory(self.angle_path)
@@ -23,7 +25,9 @@ class ResultsAgent:
     def _get_rating(self, score):
         return next(label for thresh, label in RATINGS if score >= thresh)
 
-    def _track_exercise(self, ex, fps=30, duration=30):
+    def _track_exercise(self, ex, fps=None, duration=None):
+        fps = fps or self.fps
+        duration = duration or self.duration
         joint = ex["target_joint"]
         mn, mx = ex["ideal_angle_min"], ex["ideal_angle_max"]
         correct, total, errors, err_start = 0, 0, [], None
@@ -48,9 +52,11 @@ class ResultsAgent:
                 "ideal_angle_max": mx, "total_frames": total, "correct_frames": correct,
                 "performance_score": round(score, 1), "performance_rating": self._get_rating(score), "errors": errors}
 
-    def process_suggestions(self, suggestions):
+    def process_suggestions(self, suggestions, fps=None, duration=None):
         user_id = suggestions["user_id"]
-        results = [self._track_exercise(ex) for ex in suggestions["suggestions"]]
+        if not self.stream or not self.pose or not self.angle:
+            raise RuntimeError("Real-time services are required: live stream, pose, and angle calculator.")
+        results = [self._track_exercise(ex, fps=fps, duration=duration) for ex in suggestions["suggestions"]]
         avg = round(sum(r["performance_score"] for r in results) / len(results), 1) if results else 0
         date_str = datetime.now().strftime("%Y-%m-%d")
         ts = timestamp()

@@ -1,6 +1,8 @@
 """Quick test for Module 2 agents."""
 import json
 from agents.module2 import SuggestionAgent, ResultsAgent, TrackerAgent
+from services import LiveStreamService, PoseEstimationService, AngleCalculatorService
+from config import config
 
 # ---------------------------------------------------
 # Confirmed summary from Module 1 (Patient Schema)
@@ -29,7 +31,7 @@ summary = {
 rehab_goal = "I want to cure my shoulder dislocation and regain full, stable shoulder movement."
 
 # ---------------------------------------------------
-# 1️⃣ Suggestion Agent
+# 1) Suggestion Agent
 # ---------------------------------------------------
 print("=== SUGGESTION AGENT ===")
 sa = SuggestionAgent()
@@ -41,11 +43,19 @@ print(json.dumps(suggestions, indent=2))
 
 
 # ---------------------------------------------------
-# 2️⃣ Results Agent
+# 2) Results Agent
 # (Simulates performing suggested exercises)
 # ---------------------------------------------------
 print("\n=== RESULTS AGENT ===")
-ra = ResultsAgent()
+stream = LiveStreamService(
+    camera_index=config.CAMERA_INDEX,
+    fps=30,
+    width=config.FRAME_WIDTH,
+    height=config.FRAME_HEIGHT,
+)
+pose = PoseEstimationService()
+angle = AngleCalculatorService()
+ra = ResultsAgent(live_stream_service=stream, pose_estimation_service=pose, angle_calculator_service=angle)
 
 daily_result = ra.process_suggestions(suggestions)
 
@@ -53,7 +63,7 @@ print(json.dumps(daily_result, indent=2))
 
 
 # ---------------------------------------------------
-# 3️⃣ Tracker Agent (Simulate 7-Day Recovery Window)
+# 3) Tracker Agent (Simulate 7-Day Recovery Window)
 # ---------------------------------------------------
 print("\n=== TRACKER AGENT ===")
 ta = TrackerAgent()
@@ -84,4 +94,4 @@ if track["week_completed"]:
     print(json.dumps(track["analysis"], indent=2))
 
 
-print("\nModule 2 test PASSED ✅")
+print("\nModule 2 test PASSED ")

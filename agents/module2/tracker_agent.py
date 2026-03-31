@@ -29,6 +29,28 @@ class TrackerAgent:
     def _save_weekly_log(self, user_id, week, log):
         safe_write_json(self.weekly_path / f"{user_id}_week{week}.json", log)
 
+    def _normalize_days(self, days):
+        # Deduplicate by session_date, keeping the most recent entry per date.
+        dedup = {}
+        no_date = []
+        for d in days:
+            key = d.get("session_date")
+            if key:
+                if key in dedup:
+                    dedup.pop(key)
+                dedup[key] = d
+            else:
+                no_date.append(d)
+        normalized = list(dedup.values())
+        try:
+            normalized.sort(key=lambda d: datetime.fromisoformat(d["session_date"]))
+        except Exception:
+            pass
+        normalized.extend(no_date)
+        if len(normalized) > DAYS_PER_WEEK:
+            normalized = normalized[-DAYS_PER_WEEK:]
+        return normalized
+
     def _analyze_with_llm(self, log):
         prompt = (f"Analyze this 7-day rehab performance data:\n{json.dumps(log['days'])}\n"
                   "Return JSON: trend (improving/stable/regressing), improvement_delta, "
@@ -61,7 +83,25 @@ class TrackerAgent:
     def process_daily_result(self, daily_result, week_number=1):
         user_id = daily_result["user_id"]
         log = self._load_weekly_log(user_id, week_number)
-        log["days"].append(daily_result)
+        log["days"] = self._normalize_days(log["days"])
+        session_date = daily_result.get("session_date")
+        if session_date:
+            # If this date exists, replace it to avoid duplicates.
+            replaced = False
+            for i, d in enumerate(log["days"]):
+                if d.get("session_date") == session_date:
+                    log["days"][i] = daily_result
+                    replaced = True
+                    break
+            if not replaced:
+                # If a full week is already logged, start fresh for new data.
+                if len(log["days"]) >= DAYS_PER_WEEK:
+                    log["days"] = [daily_result]
+                else:
+                    log["days"].append(daily_result)
+        else:
+            log["days"].append(daily_result)
+        log["days"] = self._normalize_days(log["days"])
         self._save_weekly_log(user_id, week_number, log)
         completed = len(log["days"]) >= DAYS_PER_WEEK
         analysis = self._analyze_with_llm(log) if completed else None
